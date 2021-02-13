@@ -3,12 +3,13 @@ In this repository, we have uploaded the code corresponding to the WWW2021 Paper
 
 Use the following two scripts to generate the results,
 
-./MMF_News_dataset.sh
-./MMF_Movies_dataset.sh
+    ./MMF_News_dataset.sh
+
+    ./MMF_Movies_dataset.sh
 
 Use the following notebook to generate the figures,
 
-figure_notebook.ipynb
+    figure_notebook.ipynb
 
 Experients on News dataset are based on a Real News Dataset. This can be downloaded as a csv file from [adfontes media](https://www.adfontesmedia.com/interactive-media-bias-chart/?v=402f03a963ba) and must be saved in as "InteractiveMediaBiasChart.csv" in the data subfolder.
 

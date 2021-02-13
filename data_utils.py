@@ -47,6 +47,8 @@ def load_news_items(n = 30, completly_random = False, n_left=None):
         for index, row in data_full.sample(frac=1).iterrows():
             if((row["Bias"]<0 and c_left < n_left ) or (row["Bias"]>0 and len(items) < n - (n_left -c_left))):
                 items.append(Item(row["Bias"], quality=1, id=index, news_group=row["Group"]))
+            if (row["Bias"]<0 and c_left < n_left ) :
+                    c_left+=1
             if( len(items)>= n):
                 return items
 
@@ -190,7 +192,7 @@ def load_movie_data(n_movies, n_user, n_company, movie_features, movie_ranking_s
     ratings_full = pd.read_csv("data/ratings.csv")
     ratings = ratings_full[ratings_full["movieId"].isin(meta_data["id"])]
     ratings, meta_data = select_movies(ratings, meta_data, n_movies, n_user)
-
+    
     #Complete Ranking Matrix
     ranking_matrix = get_ranking_matrix_incomplete(ratings, meta_data, n_user)
     full_matrix, features_matrix_factorization, movie_idx_to_id = get_matrix_factorization(ratings, meta_data, n_user, n_movies)
@@ -215,7 +217,7 @@ def load_movie_data(n_movies, n_user, n_company, movie_features, movie_ranking_s
     print("the Dataset before completion is", len(ratings) / float(n_user*n_movies), " filled")
     print("The most rated movie has {} votes, the least {} votes; mean {}".format(po2.max(), po2.min(), po2.mean()))
     print("The most rating user rated {} movies, the least {} movies; mean {}".format(po.max(), po.min(), po.mean()))
-
+    np.save("data/movie_data_prepared.npy",[full_matrix,user_features,groups])
     #The list of groups contains all movies
     assert(np.shape(groups) == (n_movies,))
     if movie_ranking_sample_file:

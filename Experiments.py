@@ -243,21 +243,41 @@ def run_and_save_final_stats(methods, items, trials=10, iterations=2000, get_use
     return final_stats
 
 @ex.capture
-def compare_controller_LP(PLOT_PREFIX, trials = 20, iterations = 3000):
+def compare_controller_LP(PLOT_PREFIX, trials = 20, iterations = 3000,multiple_items=None):
 
+    if not os.path.exists(PLOT_PREFIX):
+        os.makedirs(PLOT_PREFIX)
+    if multiple_items==None:
+        multiple_items = [load_news_items(n=30, completly_random=True) for i in range(trials)]
+    items = multiple_items[0]
+    popularity = np.ones(len(items))
+    G = assign_groups(items)
+#     click_models = ["lambda0","lambda0.0001", "lambda0.001", "lambda0.01","lambda0.1","lambda1", "lambda10","lambda100"]
+    click_models = ["lambda0.1"]
+
+    if not os.path.exists(PLOT_PREFIX):
+        os.makedirs(PLOT_PREFIX)
+#     collect_relevance_convergence(items, popularity, trials, click_models=click_models,
+#                                   methods=["Fair-I-IPS-LP", "Fair-I-IPS"], iterations=iterations, multiple_items=multiple_items)
+    collect_relevance_convergence(items, popularity, trials, click_models=click_models,
+                                  methods=["Fair-E-IPS-LP"], iterations=iterations, multiple_items=multiple_items)
+#     load_and_plot_lambda_comparison(PLOT_PREFIX, trials)
+
+@ex.capture
+def compare_controller_lambda(PLOT_PREFIX, trials = 20, iterations = 3000):
     if not os.path.exists(PLOT_PREFIX):
         os.makedirs(PLOT_PREFIX)
     multiple_items = [load_news_items(n=30, completly_random=True) for i in range(trials)]
     items = multiple_items[0]
     popularity = np.ones(len(items))
     G = assign_groups(items)
-    click_models = ["lambda0","lambda0.0001", "lambda0.001", "lambda0.01","lambda0.1","lambda1", "lambda10","lambda100"]
+    click_models = ["lambda_cutoff0","lambda_cutoff0.0001", "lambda_cutoff0.001", "lambda_cutoff0.01","lambda_cutoff0.1","lambda_cutoff1", "lambda_cutoff10","lambda_cutoff100"]
     if not os.path.exists(PLOT_PREFIX):
         os.makedirs(PLOT_PREFIX)
     collect_relevance_convergence(items, popularity, trials, click_models=click_models,
-                                  methods=["Fair-I-IPS-LP", "Fair-I-IPS"], iterations=iterations, multiple_items=multiple_items)
+                                  methods=["Fair-I-IPS","Fair-I-IPS"], iterations=iterations, multiple_items=multiple_items)
     load_and_plot_lambda_comparison(PLOT_PREFIX, trials)
-
+    
 
 def news_experiment():
     items = load_news_items()
@@ -330,9 +350,9 @@ def news_experiment():
 
 
 @ex.capture
-def movie_experiment(PLOT_PREFIX, methods, MOVIE_RATING_FILE, trials=4, iterations=5000, binary_rel=False):
+def movie_experiment(PLOT_PREFIX, methods, MOVIE_RATING_FILE, trials=4, iterations=5000, binary_rel=False,click_models=["PBM_log"],add_args=None):
 
-
+    print(add_args,"add_args","*"*50)
     _, _, groups = load_movie_data_saved(MOVIE_RATING_FILE)
     items = []
     for i, g in enumerate(groups):
@@ -347,5 +367,5 @@ def movie_experiment(PLOT_PREFIX, methods, MOVIE_RATING_FILE, trials=4, iteratio
         multi = -1
     else:
         multi = None
-    collect_relevance_convergence(items, popularity, trials, click_models=["PBM_log"],
-                                  methods=methods, iterations=iterations, multiple_items=multi)
+    collect_relevance_convergence(items, popularity, trials, click_models=click_models,
+                                  methods=methods, iterations=iterations, multiple_items=multi,add_args=add_args)

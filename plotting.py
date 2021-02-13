@@ -200,7 +200,7 @@ def plot_unfairness_over_time(overall_fairness, click_models, methods, only_two 
         plt.fill_between(np.arange(n), overall_fairness[i, :, 1] - fairness_std[i, :, 1],
                          overall_fairness[i, :, 1] + fairness_std[i, :, 1], alpha=0.4, color=color)
         ax= plt.gca()
-        ax.set_ylim(0, np.max(overall_fairness[i,15:,1]))
+        ax.set_ylim(0,1.8)
         x0,x1 = ax.get_xlim()
         y0,y1 = ax.get_ylim()
         ax.set_aspect(abs(x1-x0)/abs(y1-y0))
@@ -232,7 +232,7 @@ def plot_unfairness_over_time(overall_fairness, click_models, methods, only_two 
 
         #plt.axis([0,n,0,1])
         ax= plt.gca()
-        ax.set_ylim(0, np.max(overall_fairness[i,15:,3]))
+        ax.set_ylim(0, 0.9)
         x0,x1 = ax.get_xlim()
         y0,y1 = ax.get_ylim()
         ax.set_aspect(abs(x1-x0)/abs(y1-y0))
@@ -244,7 +244,7 @@ def plot_unfairness_over_time(overall_fairness, click_models, methods, only_two 
     #files.download("Unfairness.pdf")
 
     plt.show("Unfairness")
-
+    plt.close()
 
 def plot_ndcg(ndcg, label="", plot=True, figure_name="NDCG", window_size=0, std = None):
     plt.figure(figure_name)
@@ -256,7 +256,7 @@ def plot_ndcg(ndcg, label="", plot=True, figure_name="NDCG", window_size=0, std 
         #moving_average = [np.mean(ndcg[:(i+1)]) for i in range(len(ndcg))]
         moving_average = np.cumsum(ndcg)/np.arange(1,len(ndcg)+1)
         p = plt.plot(np.arange(len(moving_average)), moving_average, label=label, linestyle='-')
-        #plt.axis([0, len(moving_average), 0.75, 0.9]
+#         plt.axis([0, len(moving_average), 0.66, 0.75])
         plt.axis([0, len(moving_average), 0.6, 1])
         print(np.shape(ndcg), np.shape(moving_average), np.sum(ndcg), np.sum(moving_average))
 
@@ -270,7 +270,7 @@ def plot_ndcg(ndcg, label="", plot=True, figure_name="NDCG", window_size=0, std 
     else:
         p =  plt.plot(np.arange(len(ndcg)),ndcg, label = label)
         #plt.axis([0, len(ndcg), 0.75, 0.9])
-        plt.axis([0, len(ndcg), 0.9, 1])
+#         plt.axis([0, len(ndcg), 0.9, 1])
 
         if (std is not None):
             color = p[-1].get_color()
@@ -300,20 +300,20 @@ def plot_NDCG_Unfairness(ndcg,unfairness,ax, ax2=None, label="", unfairness_labe
 
     color = p[-1].get_color()
     ax.set_xlim([0,n])
-    """
+
     if(synthetic):
         ax.set_ylim([0.95, 1])
     else:
-        ax.set_ylim([0.75,0.9])
-        """
+        ax.set_ylim([0.66,0.9])
+
     if ax2 is not None:
         ax2.set_xlim([0,n])
-        """
+
         if(synthetic):
-            ax2.set_ylim([0, 0.2])
+            ax2.set_ylim([0, 0.4])
         else:
-            ax2.set_ylim([0, 0.2])
-        """
+            ax2.set_ylim([0, 0.4])
+
         ax2.set_xlabel("Users")
         ax2.set_ylabel(unfairness_label)
 
@@ -426,13 +426,13 @@ def plot_with_errorbar(x, all_stats, methods, filename, x_label, log_x = False, 
     if impact:
         ax2.set_ylabel("Impact Unfairness")
         #ax.set_ylim([0.95, 1])
-        ax.set_ylim([0.7, 1.05])
-        ax2.set_ylim([0, 0.8])
+        ax.set_ylim([0.20, 0.95])
+        ax2.set_ylim([0, 0.25])
     else:
         ax2.set_ylabel("Exposure Unfairness")
-        ax2.set_ylim([0, 0.8])
+        ax2.set_ylim([0, 0.25])
         #ax2.set_ylim([0, 0.2])
-        ax.set_ylim([0.7, 1.05])
+        ax.set_ylim([0.50, 0.90])
         #ax.set_ylim([0.95, 1])
     ax.set_xlim(min(x),max(x))
     ax2.set_xlim(min(x), max(x))
@@ -458,7 +458,7 @@ def load_and_plot_lambda_comparison(data_path, trials):
     G = assign_groups(items)
     pair_group_combinations = [(a, b) for a in range(len(G)) for b in range(a + 1, len(G))]
     methods = ["Fair-I-IPS-LP", "Fair-I-IPS"]
-    data = np.load(data_path + "Fairness_Data.npy")
+    data = np.load(data_path + "Fairness_Data.npy",allow_pickle=True)
 
     x = [0, 0.0001, 0.001, 0.01, 0.1, 1, 10, 100]
     plot_lambda_comparison(x, data, methods, trials, pair_group_combinations, data_path + "lambdaAllComparisons")

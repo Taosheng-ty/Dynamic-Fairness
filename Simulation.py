@@ -7,6 +7,7 @@ import random
 import pandas as pd
 import time
 import warnings; warnings.simplefilter('ignore') #Ignores Warnings for nicer Plots. Disable for Debugging
+import math
 import data_utils
 import os
 import birkhoff
@@ -15,8 +16,9 @@ from itertools import permutations
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from plotting import *
-
+import random
 from Documents import Item, Movie
+import copy
 """##User Affinity and Distribution"""
 
 def assign_groups(items):
@@ -45,17 +47,24 @@ def affinity_score(user, items, bernulli=True, DATA_SET=0):
 
         #Calculating the Affnity Probability for each Item, based user polarity and user Openness
         aff_prob = np.exp(-(item_affs - user[0])**2 / (2*user[1]**2))*item_quality
-
+        aff_prob1=aff_prob
         # Binarize The probability of Relevance to Actual relevance of an User
         aff_prob = np.random.rand(*np.shape(aff_prob)) < aff_prob
+#         print(user,item_affs,item_quality,aff_prob1,aff_prob,"user,item_affs,item_quality,aff_prob1,aff_prob")
         return aff_prob
     
     
 #    Calculate The position Bias for each of the N Positions #
 def position_bias(n, model="PBM_log", ranked_relevances = None):
+#     print(model=="PBM_log",model,"PBM_log")
     if(model=="PBM_log"):#Position Based Model with inverse log(rank)
-        pos = 1/(np.log2(2+np.arange(n)))
+        pos = 1/(np.log2(2+np.arange(n))) 
         pos /= np.max(pos)
+    elif(model=="PBM_cutoff"):#Position Based Model with inverse log(rank)
+        pos=np.zeros(n)
+        top_n = 1/(np.log2(2+np.arange(10)))
+        top_n /= np.max(top_n)
+        pos[:10]=top_n
     elif(model=="PBM_inv"):#Position Based Model with inverse rank
         scale = 1
         pos = (1/(1+ np.arange(n)))**scale
@@ -90,6 +99,21 @@ def get_ndcg_score(ranking, true_relevances, click_model = "PBM_log"):
         return 1
     return dcg / idcg
 
+def get_ndcg_score_top_k(ranking, true_relevances, click_model = "PBM_log",top_k_list=[1,3]):
+    ndcg_top_k=[]
+    for i in top_k_list:
+#         print(true_relevances[ranking])
+        dcg = np.sum(true_relevances[ranking][:i] / np.log2(2+np.arange(len(ranking)))[:i])
+        idcg = np.sum(np.sort(true_relevances)[::-1][:i] / np.log2(2+np.arange(len(ranking)))[:i])
+        if dcg is None or idcg is None or dcg/idcg is None:
+            print("Some kind of None appeard with",dcg, idcg, dcg/idcg)
+        if(idcg ==0):
+            ndcg_top_k.append(1)
+        else:
+            ndcg_top_k.append(dcg / idcg)
+    ndcg_top_k=np.array(ndcg_top_k)
+    return ndcg_top_k
+
 @ex.capture
 def get_numerical_relevances(items, DATA_SET, MOVIE_RATING_FILE=""):
     if DATA_SET == 0:
@@ -118,8 +142,181 @@ class Usersampler:
             return next(self.sample_user_generator)
 
 
+def top_down(weighted_popularity,G,rank_group_split,personal_relevance=np.array([-100]),add_args=None):
+    average_rele=[]
+#     print("using top down")
+#     print(add_args,"in top down","*"*50)
+    pos_bias=position_bias(weighted_popularity.shape[0])
+    if np.sum(personal_relevance)==-100:
+#         print("no personal relevance using average relevance")
+        personal_relevance=weighted_popularity
+#     print(weighted_popularity,personal_relevance,"weighted_popularity,personal_relevance")
+    for i in G:
+        average_rele.append(np.mean(weighted_popularity[i]))
+    average_rele=np.array(average_rele)
+#     print(average_rele,"average_rele","weighted_popularity",weighted_popularity)
+    rank_group_split_copy = copy.deepcopy(rank_group_split)
+    G_size=np.array([len(G_i) for G_i in G])
+    sorted_G=[]
+    def func(G):
+        return personal_relevance[G]
+    for i in G:
+        sorted_G.append(sorted(i, key = func,reverse=True))
+#     rank_group_split
+    def cum_id(rank_group_split_copy,k):
+        product=rank_group_split_copy*pos_bias[np.newaxis,:]
+        rank_group_split_cum_exposure=np.cumsum(product,axis=1)[:,k]/average_rele/G_size
+#         print(rank_group_split_cum_exposure,"rank_group_split_cum_exposure","*"*20)
+#         print(average_rele,"average_rele","*"*20)
+#         print(np.cumsum(product,axis=1)[:,k],"np.cumsum(product,axis=1)[:,k]","*"*20)
+        sorted_group_id=rank_group_split_cum_exposure.argsort(0)
+        return sorted_group_id
+#     rank_group_split_cum=np.cumsum(rank_group_split,axis=1)    
+#     rank_group_split_cum_exposure=rank_group_split_cum/average_rele[:,np.newaxis]    
+#     sorted_group_id=rank_group_split_cum_exposure.argsort(0)
+    rangking=[]
+    lambda_random_whole=2
+    
+    lambda_random_whole_part=0.5
+    if "lambda_fair"in add_args.keys():
+        lambda_random_whole_part=add_args["lambda_fair"]
+#     print(lambda_random_whole_part,"lambda_random_whole_part","*"*30)
+    ranking_relevance=np.argsort(personal_relevance)[::-1]
+#     print(weighted_popularity,"weighted_popularity\n","*"*20)
+#     print(personal_relevance,"personal_relevance\n","*"*20)
+#     print(average_rele,"average_rele\n","*"*20)
+#     print(sorted_G,"sorted_G\n","*"*20)
+#     print(G,"G\n","*"*20)
+#     print(rank_group_split,"rank_group_splitn","*"*20)
+    sorted_group_id_list=[]
+    if random.random()>lambda_random_whole:
+        return ranking_relevance
+    else:
+        for i in range(weighted_popularity.shape[0]):
+            if random.random()>lambda_random_whole_part:
+                G_id=get_maximu_G_id(sorted_G,personal_relevance)
+                rangking.append(sorted_G[G_id].pop(0))
+                rank_group_split_copy[G_id,i]+=1
+                
+            else:
+                sorted_group_id=cum_id(rank_group_split_copy,i)
+                sorted_group_id_list.append(sorted_group_id)
+    #             print(sorted_group_id,"sorted_group_id\n","*"*20)
+                for j in range(len(G)):
+                    if sorted_G[sorted_group_id[j]]:
+                        rangking.append(sorted_G[sorted_group_id[j]].pop(0))
+                        rank_group_split_copy[sorted_group_id[j],i]+=1
+                        break
+        ranking=np.array(rangking).astype(int)
+#         print(ranking,"ranking\n","*"*20)
+#         sorted_group_id_list=np.array(sorted_group_id_list)
+#         print(rank_group_split_copy,rank_group_split,sorted_group_id_list,\
+#               "rank_group_split_copy,rank_group_split,sorted_group_id")
+        return ranking
+
+def get_maximu_G_id(sorted_G,personal_relevance):
+    max_G_ind=-1000
+    max_i_value=-1000
+    for ind,i in enumerate(sorted_G):
+        if len(i)>0:
+#             print(i)
+            if max_i_value<personal_relevance[i[0]]:
+                max_i_value=personal_relevance[i[0]] 
+                max_G_ind=ind
+    return max_G_ind        
+        
+def max_min_loss(a):
+    return np.max(a)-np.min(a)
+def ranking_2_average_exp(G_id_ranking_list,G):
+    exposure_aver=[]
+    G_id_ranking_list=np.array(G_id_ranking_list)
+    for G_i in range(len(G)):
+        ind_Gi=G_id_ranking_list==G_i
+        exposure_cur=np.sum(ind_Gi*1*position_bias(len(G_id_ranking_list)))
+        exposure_aver.append(exposure_cur/(np.sum(ind_Gi)+1e-10))
+    exposure_aver=np.array(exposure_aver)
+    
+    return exposure_aver
+def Greedy_selection(weighted_popularity,G,rank_group_split,\
+                     personal_relevance=np.array([-100]),add_args=None):
+    average_rele=[]
+#     print("using greedy")
+#     print(add_args,"in top down","*"*50)
+    pos_bias=position_bias(weighted_popularity.shape[0])
+    if np.sum(personal_relevance)==-100:
+#         print("no personal relevance using average relevance")
+        personal_relevance=weighted_popularity
+#     print(weighted_popularity,personal_relevance,"weighted_popularity,personal_relevance")
+    for i in G:
+        average_rele.append(np.mean(weighted_popularity[i]))
+    average_rele=np.array(average_rele)
+    rank_group_split_copy = copy.deepcopy(rank_group_split)
+    accum_aver_exp=copy.deepcopy(add_args["accum_aver_exp"])
+    sorted_G=[]
+    def func(G):
+        return personal_relevance[G]
+    for i in G:
+        sorted_G.append(sorted(i, key = func,reverse=True))
+#     rank_group_split
+    def cum_id(rank_group_split_copy,k):
+        product=rank_group_split_copy*pos_bias[np.newaxis,:]
+        rank_group_split_cum_exposure=np.cumsum(product,axis=1)[:,k]/average_rele
+        sorted_group_id=rank_group_split_cum_exposure.argsort(0)
+        return sorted_group_id
+#     rank_group_split_cum=np.cumsum(rank_group_split,axis=1)    
+#     rank_group_split_cum_exposure=rank_group_split_cum/average_rele[:,np.newaxis]    
+#     sorted_group_id=rank_group_split_cum_exposure.argsort(0)
+    rangking=[]
+    lambda_random_whole=2
+    lambda_random_whole_part=0.5
+    if "lambda_fair"in add_args.keys():
+        lambda_random_whole_part=add_args["lambda_fair"]
+#     print(lambda_random_whole_part,"lambda_random_whole_part","*"*30)
+    ranking_relevance=np.argsort(personal_relevance)[::-1]
+#     print(weighted_popularity,"weighted_popularity\n","*"*20)
+#     print(personal_relevance,"personal_relevance\n","*"*20)
+#     print(average_rele,"average_rele\n","*"*20)
+#     print(sorted_G,"sorted_G\n","*"*20)
+#     print(G,"G\n","*"*20)
+#     print(rank_group_split,"rank_group_splitn","*"*20)
+    sorted_group_id_list=[]
+    G_id_ranking_list=[]
+    if random.random()>lambda_random_whole:
+        return ranking_relevance
+    else:
+        for i in range(weighted_popularity.shape[0]):
+            if random.random()>lambda_random_whole_part:
+                G_id=get_maximu_G_id(sorted_G,personal_relevance)
+                G_id_ranking_list.append(G_id)
+                rangking.append(sorted_G[G_id].pop(0))
+                rank_group_split_copy[G_id,i]+=1
+                
+            else:
+                sorted_group_id=cum_id(rank_group_split_copy,i)
+                sorted_group_id_list.append(sorted_group_id)
+    #             print(sorted_group_id,"sorted_group_id\n","*"*20)
+                loss=math.inf
+                selected_G_id=0
+                for j in range(len(G)):
+                    if sorted_G[j]:
+                        aver_exp=ranking_2_average_exp(rangking+[j],G)
+                        loss_cur=max_min_loss((aver_exp+accum_aver_exp[:,i])/average_rele)
+                        if loss_cur<=loss:
+                            loss=loss_cur
+                            selected_G_id=j
+                
+                rangking.append(sorted_G[selected_G_id].pop(0))
+#                         rank_group_split_copy[sorted_group_id[j],i]+=1
+                        
+        ranking=np.array(rangking).astype(int)
+#         print(ranking,"ranking\n","*"*20)
+#         sorted_group_id_list=np.array(sorted_group_id_list)
+#         print(rank_group_split_copy,rank_group_split,sorted_group_id_list,\
+#               "rank_group_split_copy,rank_group_split,sorted_group_id")
+        return ranking      
+
 def get_ranking(user, popularity, items, weighted_popularity=None, G=None, ranking_method="Naive", click_model="PBM_log",
-                cum_exposure=None, decomp=None, new_fair_rank=False, nn=None, integral_fairness=None):
+                cum_exposure=None, decomp=None, new_fair_rank=False, nn=None, integral_fairness=None,relevance_ground=None,rank_group_split=None,rank_group_split_click=None,add_args=None):
     """
     Get the Ranking and position Bias
     For the Linear Program, we also return the current ranking Decomposition (decomp)
@@ -132,10 +329,22 @@ def get_ranking(user, popularity, items, weighted_popularity=None, G=None, ranki
     # Ranking of the entries
     if (ranking_method == "Naive"):
         ranking = pop_rank(popularity)
+    elif (ranking_method == "IPS_I_top_down"):
+        ranking = top_down(weighted_popularity,G,rank_group_split_click,add_args=add_args)
+    elif (ranking_method == "IPS_E_top_down"):
+        ranking = top_down(weighted_popularity,G,rank_group_split,add_args=add_args)        
+    elif (ranking_method == "IPS_E_greedy"):
+        ranking = Greedy_selection(weighted_popularity,G,rank_group_split,add_args=add_args)           
     elif (ranking_method == "IPS"):
         assert (weighted_popularity is not None)
         ranking = IPS_rank(weighted_popularity)
-    elif ("IPS-LP" in ranking_method):
+#     if (ranking_method == "Naive"):
+#         ranking = pop_rank(relevance_ground)
+#     elif (ranking_method == "IPS"):
+#         assert (weighted_popularity is not None)
+#         ranking = IPS_rank(relevance_ground)
+        
+    elif ("IPS-LP" in ranking_method and "Pers" not in ranking_method):
         # Try Linear Programm for fair ranking, when this fails, use last ranking
         if new_fair_rank or decomp is None:
             if (ranking_method == "Fair-E-IPS-LP"):
@@ -158,26 +367,62 @@ def get_ranking(user, popularity, items, weighted_popularity=None, G=None, ranki
     elif (ranking_method == "Fair-I-IPS"):
         fairness_error = get_unfairness(popularity, weighted_popularity, G, error=True)
         ranking = controller_rank(weighted_popularity, fairness_error)
+
+#     elif (ranking_method == "Fair-I-IPS"):
+#         fairness_error = get_unfairness(popularity, relevance_ground, G, error=True)
+#         ranking = controller_rank(relevance_ground, fairness_error)
     elif (ranking_method == "Fair-E-IPS"):
         fairness_error = get_unfairness(cum_exposure, weighted_popularity, G, error=True)
         ranking = controller_rank(weighted_popularity, fairness_error)
     elif ("Pers" in ranking_method):
+        
+        KP=0.01
+#         print(ranking_method,"ranking_method")
         if nn is None:
             ranking = IPS_rank(weighted_popularity)
         elif "Fair-E-Pers" == ranking_method:
             fairness_error = get_unfairness(cum_exposure, weighted_popularity, G, error=True)
-            ranking = neural_rank(nn, items, user, e_p=fairness_error)
+            ranking = neural_rank(nn, items, user, e_p=fairness_error,KP= KP)
+#             ranking = neural_rank(nn, items, user,KP= KP)
         elif "Fair-I-Pers" == ranking_method:
             fairness_error = get_unfairness(popularity, weighted_popularity, G, error=True)
-            ranking = neural_rank(nn, items, user, e_p=fairness_error)
+            ranking = neural_rank(nn, items, user, e_p=fairness_error,KP= KP)
+        elif "Fair-E_top_down-Pers" == ranking_method:
+            ranking = neural_rank_top_down(nn, items, user,weighted_popularity=weighted_popularity,\
+                                           G=G,rank_group_split=rank_group_split,add_args=add_args) 
+        elif "Fair-E_greedy-Pers" == ranking_method:
+            ranking = neural_rank_Greedy(nn, items, user,weighted_popularity=weighted_popularity,\
+                                           G=G,rank_group_split=rank_group_split,add_args=add_args) 
+        elif "Fair-I_top_down-Pers" == ranking_method:
+            ranking = neural_rank_top_down(nn, items, user, weighted_popularity=weighted_popularity,\
+                                           G=G,rank_group_split=rank_group_split_click,add_args=add_args)  
+        elif (ranking_method == "Fair-E-IPS_Pers-LP"):
+                DATA_SET=1
+                if DATA_SET == 1 :
+                    x_test = np.asarray(user[1])
+                elif DATA_SET == 0:
+                    x_test = np.asarray(user)
+                relevances = nn.predict(x_test)
+                group_fairness = get_unfairness(cum_exposure, weighted_popularity, G, error=False)
+                decomp = fair_rank_Pers(items, weighted_popularity,relevances,debug=False,
+                                   group_click_rel=group_fairness, impact=False)
+                if decomp is not None:
+                    print("fair rank per sucessful for user")
+                    p_birkhoff = np.asarray([np.max([0, x[0]]) for x in decomp])
+                    p_birkhoff /= np.sum(p_birkhoff)
+                    sampled_r = np.random.choice(range(len(decomp)), 1, p=p_birkhoff)[0]
+                    ranking = np.argmax(decomp[sampled_r][1], axis=0)
+                else:
+                    print("fair rank per fail for user")
+                    ranking = IPS_rank(weighted_popularity)
         else:
-            ranking = neural_rank(nn, items, user)
+            ranking = neural_rank(nn, items, user,KP= KP)
     elif (ranking_method == "Random"):
         ranking = random_rank(weighted_popularity)
     else:
         print("could not find a ranking method called: " + ranking_method)
         raise Exception("No Method specified")
-
+## Above part is to generate the ranking, and below is used to collect feedback.
     # create prob of click based on position
     pos = position_bias(n, click_model, weighted_popularity[ranking])
 
@@ -211,7 +456,7 @@ def get_unfairness(clicks, rel, G, error=False):
 # simulation function returns number of iterations until convergence
 @ex.capture
 def simulate(popularity, items, ranking_method="Naive", click_model="PBM_log", iterations=2000,
-             numerical_relevance=None, head_start=-1, DATA_SET=0, HIDDEN_UNITS=64, PLOT_PREFIX="", user_generator=None):
+             numerical_relevance=None, head_start=-1, DATA_SET=0, HIDDEN_UNITS=64, PLOT_PREFIX="", user_generator=None,add_args=None):
     #global sample_user
     """
     :param popularity: Initial Popularity
@@ -236,36 +481,57 @@ def simulate(popularity, items, ranking_method="Naive", click_model="PBM_log", i
     """
     #Initialize Variables
     G = assign_groups(items)
+    group_dict={}
+    for ind,i in enumerate(G):
+        for j in i:
+            group_dict[j]=ind
+    def dict_table(a):
+        return group_dict[a]
+    dict_table_v_func = np.vectorize(dict_table)
     weighted_popularity = np.asarray(popularity, dtype=np.float32)
     popularity = np.asarray(popularity)
     pophist = np.zeros((iterations, len(items)))
     w_pophist = np.zeros((iterations, len(items)))
+    rank_group_split=np.zeros((len(G),len(items)))
     if "Pers" in ranking_method:
         p_pophist = np.zeros((iterations, len(items)))
     else:
         p_pophist = None
     users = []
+#     print(click_model,"click_model")
     aff_scores = np.zeros((iterations, len(items)))
     relevances = np.zeros(len(items))
     cum_exposure = np.zeros(len(items))
     hist = np.zeros((iterations, len(popularity)))
+    propensity_history = np.zeros((iterations, len(popularity)))
     decomp = None
     group_prop = np.zeros((iterations, len(G)))
     group_clicks = np.zeros((iterations, len(G)))
     group_rel = np.zeros((iterations, len(G)))
     true_group_rel = np.zeros((iterations, len(G)))
     cum_fairness_error = np.zeros(len(items))
+    rank_hist = np.zeros((iterations, len(items)))
+    rank_group_id_sorted = np.zeros((iterations, len(items)))
+    rank_group_split_click=np.zeros((len(G),len(items)))
+    accum_aver_exp=np.zeros((len(G),len(items)))
+    if "top_k_list" in add_args.keys():
+        print(len(add_args["top_k_list"]))
+        ndcg_top_k=np.zeros((iterations,len(add_args["top_k_list"])))
     NDCG = np.zeros(iterations)
+    add_args=copy.deepcopy(add_args)
     if (numerical_relevance is None):
         numerical_relevance = get_numerical_relevances(items)
-
+#     print(popularity,"popularity")
     # counters
     count = 0
     nn_errors = np.zeros(iterations)
     nn = None
     if user_generator is None:
         user_generator = Usersampler()
+    pos_bias=position_bias(len(items))
     for i in range(iterations):
+        if add_args:
+            add_args["accum_aver_exp"]=accum_aver_exp
         count += 1
         #For the Headstart Experiment, we first choose Right then Left Leaning Users
         if (i <= head_start * 2):
@@ -279,6 +545,7 @@ def simulate(popularity, items, ranking_method="Naive", click_model="PBM_log", i
         # choose user
         user = user_generator.get_user()
         users.append(user)
+#         print(iterations,"iterations")
         aff_probs = affinity_score(user, items, DATA_SET=DATA_SET)
         relevances += aff_probs
 
@@ -286,19 +553,33 @@ def simulate(popularity, items, ranking_method="Naive", click_model="PBM_log", i
         propensities, ranking, decomp, fairness_error = get_ranking(user, popularity, items, weighted_popularity / count, G,
                                                                     ranking_method, click_model, cum_exposure, decomp,
                                                                     count % 100 == 9, nn=nn,
-                                                                    integral_fairness=cum_fairness_error / count)
-
+                                                                    integral_fairness=cum_fairness_error / count,relevance_ground=numerical_relevance,rank_group_split=rank_group_split,rank_group_split_click=rank_group_split_click,add_args=add_args)
+#         print(ranking,"iterations ",flush=True)
+        
         # update popularity
-        popularity, weighted_popularity = simulate_click(aff_probs, propensities, popularity, weighted_popularity,
+        popularity, weighted_popularity,clicks = simulate_click(aff_probs, propensities, popularity, weighted_popularity,
                                                          ranking, click_model)
 
         # Save History
+        rank_hist[i]=ranking
         aff_scores[i] = aff_probs
         hist[i, :] = ranking
         cum_exposure += propensities
         pophist[i, :] = popularity
         w_pophist[i, :] = weighted_popularity
-
+        propensity_history[i, :]=propensities
+        rank_group_id_sorted[i,:]=dict_table_v_func(ranking)
+        for G_i in range(len(G)):
+            ind_Gi=rank_group_id_sorted[i]==G_i
+            exposure_cur=np.cumsum(ind_Gi*1*pos_bias)
+            exposure_aver=exposure_cur/(np.cumsum(ind_Gi)+1e-10)
+    #         print(ind_Gi,exposure_cur,np.cumsum(ind_Gi)+1e-10)
+    #         print(exposure_aver)
+            accum_aver_exp[G_i]+=exposure_aver          
+            rank_group_split[G_i,rank_group_id_sorted[i]==G_i]+=1
+            clicks_ranked=clicks[ranking]
+            ind_clicked=np.all([rank_group_id_sorted[i]==G_i,clicks_ranked==1],0)
+            rank_group_split_click[G_i,ind_clicked]+=1
         # update neural network
         if "Pers" in ranking_method:
             if (i == 99):  # Initialize Neural Network
@@ -318,7 +599,7 @@ def simulate(popularity, items, ranking_method="Naive", click_model="PBM_log", i
                                                                         hidden_units=HIDDEN_UNITS,
                                                                         news=True,
                                                                         supervised=True, logdir=PLOT_PREFIX)
-                    train_y = aff_scores[:i + 1]
+                    train_y = aff_scores[:i + 1]  ## Ground truth relevance score.
                 nn.train(train_x, train_y, epochs=2000, trial=i)
             elif (i > 99 and i % 10 == 9):
                 if "Skyline" in ranking_method:
@@ -349,9 +630,12 @@ def simulate(popularity, items, ranking_method="Naive", click_model="PBM_log", i
 
         if DATA_SET:
             NDCG[i] = get_ndcg_score(ranking, user[0])
+            if "top_k_list" in add_args.keys():
+                ndcg_top_k[i]=get_ndcg_score_top_k(ranking, user[0],top_k_list=add_args["top_k_list"])
         else:
             NDCG[i] = get_ndcg_score(ranking, aff_probs)
-
+            if "top_k_list" in add_args.keys():
+                ndcg_top_k[i]=get_ndcg_score_top_k(ranking, aff_probs,top_k_list=add_args["top_k_list"])
         group_prop[i, :] = [np.sum(cum_exposure[G[i]]) for i in range(len(G))]
         group_clicks[i, :] = [np.sum(popularity[G[i]]) for i in range(len(G))]
         if ("Pers" in ranking_method):
@@ -370,7 +654,14 @@ def simulate(popularity, items, ranking_method="Naive", click_model="PBM_log", i
     mean_exposure = cum_exposure / count
 
     fairness_hist = {"prop": group_prop, "clicks": group_clicks, "rel": group_rel, "true_rel": true_group_rel,
-                     "NDCG": NDCG}
+                     "NDCG": NDCG,"aff_scores":aff_scores,"pophist":pophist,\
+                     "hist":hist,"w_pophist":w_pophist,"propensity_history":propensity_history,\
+                     "G":G,"rank_hist":rank_hist,"numerical_relevance":numerical_relevance,\
+                     "rank_group_id_sorted":rank_group_id_sorted,"rank_group_split":rank_group_split,\
+                    "rank_group_split_click":rank_group_split_click}
+    if "top_k_list" in add_args.keys():
+        for ind,top_k in enumerate(add_args["top_k_list"]):
+            fairness_hist["NDCG_"+str(top_k)]=ndcg_top_k[:,ind]
     return count, hist, pophist, ranking, users, ideal_ranking, mean_relevances, w_pophist, nn_errors, mean_exposure, fairness_hist, p_pophist
 
 
@@ -381,8 +672,8 @@ def simulate_click(aff_probs, propensities, popularity, weighted_popularity, ran
         viewed = rand_prop < propensities
         clicks = np.logical_and(rand_var < aff_probs, viewed)
         popularity += clicks
-        weighted_popularity += clicks / propensities
-
+        weighted_popularity += clicks / (propensities+1e-5)  ##
+        
     elif click_model == "Cascade" or click_model == "DCM":
         c_stop = 1
         if click_model == "Cascade":
@@ -404,7 +695,7 @@ def simulate_click(aff_probs, propensities, popularity, weighted_popularity, ran
                 c_stop *= gamma_no
     else:
         raise Exception("Could not find the clickmodel")
-    return popularity, weighted_popularity
+    return popularity, weighted_popularity,clicks
 
 
 """##Ranking Functions"""
@@ -431,12 +722,35 @@ def controller_rank(weighted_popularity, e_p, KP= 0.01):
 #Ranking with neural network relevances
 @ex.capture
 def neural_rank(nn, items, user, DATA_SET = 1, e_p = 0, KP= 0.01 ):
+#     print(KP)
     if DATA_SET == 1 :
         x_test = np.asarray(user[1])
     elif DATA_SET == 0:
         x_test = np.asarray(user)
     relevances = nn.predict(x_test)
     return np.argsort(relevances+ KP * e_p)[::-1]
+
+#Ranking with neural network relevances
+@ex.capture
+def neural_rank_top_down(nn, items, user, DATA_SET = 1, weighted_popularity=None,G = 0, rank_group_split= 0.01,add_args=None ):
+#     print(KP)
+    if DATA_SET == 1 :
+        x_test = np.asarray(user[1])
+    elif DATA_SET == 0:
+        x_test = np.asarray(user)
+    relevances = nn.predict(x_test)
+    
+    return top_down(weighted_popularity,G,rank_group_split,relevances,add_args=add_args)
+@ex.capture
+def neural_rank_Greedy(nn, items, user, DATA_SET = 1, weighted_popularity=None,G = 0, rank_group_split= 0.01,add_args=None ):
+#     print(KP)
+    if DATA_SET == 1 :
+        x_test = np.asarray(user[1])
+    elif DATA_SET == 0:
+        x_test = np.asarray(user)
+    relevances = nn.predict(x_test)
+    
+    return Greedy_selection(weighted_popularity,G,rank_group_split,relevances,add_args=add_args)
 
 #Fair Ranking
 @ex.capture
@@ -552,7 +866,121 @@ def fair_rank(items, popularity,ind_fair=False, group_fair=True, debug=False, w_
             #print(probabilistic_ranking)
 
     return decomp
+#Fair Ranking
+@ex.capture
+def fair_rank_Pers(items, popularity,popularity_per,ind_fair=False, group_fair=True, debug=False, w_fair = 1, group_click_rel = None, impact=True, LP_COMPENSATE_W=10):
+    print("using fair rank per")
+    n = len(items)
+    pos_bias = position_bias(n)
+    G = assign_groups(items)
+    n_g, n_i = 0, 0
+    if(group_fair):
+        n_g += (len(G)-1)*len(G)
+    if(ind_fair):
+        n_i += n * (n-1)
 
+    n_c = n**2 + n_g + n_i
+
+
+    c = np.ones(n_c)
+    c[:n**2] *= -1
+    c[n**2:] *= w_fair
+    A_eq = []
+    #For each Row
+    for i in range(n):
+        A_temp = np.zeros(n_c)
+        A_temp[i*n:(i+1)*n] = 1
+        assert(sum(A_temp)==n)
+        A_eq.append(A_temp)
+        c[i*n:(i+1)*n] *= popularity_per[i]
+
+    #For each coloumn
+    for i in range(n):
+        A_temp = np.zeros(n_c)
+        A_temp[i:n**2:n] = 1
+        assert(sum(A_temp)==n)
+        A_eq.append(A_temp)
+        #Optimization
+        c[i:n**2:n] *= pos_bias[i]
+    b_eq = np.ones(n*2)
+    A_eq = np.asarray(A_eq)
+    bounds = [(0,1) for _ in range(n**2)] + [(0,None) for _ in range(n_g+n_i)]
+
+
+    A_ub = []
+    b_ub = np.zeros(n_g+n_i)
+    if(group_fair):
+        U = []
+        for group in G:
+            #Avoid devision by zero
+            u = np.max([sum(np.asarray(popularity)[group]), 0.01])
+            U.append(u)
+        comparisons = list(permutations(np.arange(len(G)),2))
+        j = 0
+        for a,b in comparisons:
+            f = np.zeros(n_c)
+            if len(G[a]) > 0 and len(G[b])>0:
+                for i in range(n):
+                    if impact:
+                        tmp1 = popularity[i] / U[a] if i in G[a] else 0
+                        tmp2 = popularity[i] / U[b] if i in G[b] else 0
+                    else:
+                        tmp1 = 1. / U[a] if i in G[a] else 0
+                        tmp2 = 1. / U[b] if i in G[b] else 0
+                    f[i*n:(i+1)*n] =  (tmp1 - tmp2) # * popularity[i] for equal impact instead of equal Exposure
+                for i in range(n):
+                    f[i:n**2:n] *= pos_bias[i]
+                f[n**2+j] = -1
+                if group_click_rel is not None:
+                    b_ub[j] = LP_COMPENSATE_W * (group_click_rel[b] - group_click_rel[a])
+            j += 1
+            A_ub.append(f)
+
+    if(ind_fair):
+        comparisons = list(permutations(np.arange(len(popularity)),2))
+        j = 0
+        for a,b in comparisons:
+            f = np.zeros(n_c)
+            if(popularity[a] >= popularity[b]):
+                tmp1 = 1. / np.max([0.01,popularity[a]])
+                tmp2 = 1. / np.max([0.01,popularity[b]])
+                f[a*n:(a+1)*n] = tmp1
+                f[a*n:(a+1)*n] *= pos_bias
+                f[b*n:(b+1)*n] = -1 *  tmp2
+                f[b*n:(b+1)*n] *= pos_bias
+
+                f[n**2+n_g+j] = -1
+            j += 1
+            A_ub.append(f)
+
+    res = scipy.optimize.linprog(c, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub, bounds=bounds, options=dict(bland =True, tol=1e-12), method = "interior-point")
+    probabilistic_ranking = np.reshape(res.x[:n**2],(n,n))
+
+
+    if(debug):
+        print("Shape of the constrains", np.shape(A_eq), "with {} items and {} groups".format(n, len(G)))
+        print("Fairness constraint:", np.round(np.dot(A_eq,res.x),4))
+        #print("Constructed probabilistic_ranking with score {}: \n".format(res.fun), np.round(probabilistic_ranking,2))
+        print("Col sum: ", np.sum(probabilistic_ranking,axis=0))
+        print("Row sum: ", np.sum(probabilistic_ranking,axis=1))
+        #plt.matshow(A_eq)
+        #plt.colorbar()
+        #plt.plot()
+        plt.matshow(probabilistic_ranking)
+        plt.colorbar()
+        plt.plot()
+
+    #Sample from probabilistic ranking using Birkhoff-von-Neumann decomposition
+    try:
+        decomp = birkhoff.birkhoff_von_neumann_decomposition(probabilistic_ranking)
+    except:
+        decomp = birkhoff.approx_birkhoff_von_neumann_decomposition(probabilistic_ranking)
+
+        if debug:
+            print("Could get a approx decomposition with {}% accuracy".format(100*sum([x[0] for x in decomp])) )
+            #print(probabilistic_ranking)
+
+    return decomp
 
 def ideal_rank(users, item_affs, DATA_SET = 0):
     aff_prob = np.zeros(len(item_affs))
@@ -561,18 +989,187 @@ def ideal_rank(users, item_affs, DATA_SET = 0):
 
     return aff_prob, (np.argsort(aff_prob)[::-1])
 
+def plot_topk_instant_group_size(top_k_list=[3,5,10,20,30],file="plots/EXP1_topk/Fairness_Data.npy",\
+              labels=["1","2","3"],methods=["1","2","3"],PLOT_PREFIX="trial/",click_models=["pbm"]):
+    data = np.load(file, allow_pickle=True)
+    method_num=len(data)
+    trial_num,iteration_num=data[0]["rank_hist"].shape[:2]
+    G=data[0]['G']
+    group_num=len(G[0])
+    run_data=[]
+    data_top_k={}
+    
+    for top_k in top_k_list:
+        data_all_meth=[]
+        for meth in range(method_num):
+            data_meth_cur={}
+            group_prop=np.zeros((trial_num,iteration_num,group_num))
+            group_click=np.zeros((trial_num,iteration_num,group_num))
+            true_group_rel=np.zeros((trial_num,iteration_num,group_num))
+            pophist=data[meth]["pophist"]
+            clicks=np.zeros_like(pophist)
+            clicks[:,0,:]=pophist[:,0,:]
+            clicks[:,1:,:]=pophist[:,1:,:]-pophist[:,:-1,:]
+            
+            for trial in range(trial_num):
+                G_trial=data[meth]['G'][trial]
+                rank_hist=data[meth]['rank_hist'][trial,:,:top_k]
+                propensity=data[meth]['propensity_history'][trial,:,:]
+                rele_gnd=data[meth]["numerical_relevance"][trial,:]
+                clicks_trial=clicks[trial,:,:]
+                group_num_each=np.array([len(i)for i in data[meth]['G'][trial]])
+                true_rele_aver=data[meth]["true_rel"][trial,0]/group_num_each
+                
+#                 print(true_rele_aver,"true_rele_aver")
+                for iteration in range(iteration_num):
+                    propensity_cur=propensity[iteration,:]
+                    G_cur=[]
+                    top_k_ind=rank_hist[iteration,:]
+                    click_cur=clicks_trial[iteration,:]
+                    for j in G[trial]:
+                        G_cur.append(np.intersect1d(j,top_k_ind).astype(int))
+#                     print(G_cur)
+                    for G_i in range(len(G_trial)):
+                        cur_propensity=0
+                        cur_click=0
+                        if len(G_cur[G_i])==0:
+#                             print(G_cur[G_i])
+                            cur_propensity=0
+                            cur_click=0
+                        else:
+                            cur_propensity=np.sum(propensity_cur[G_cur[G_i]])/len(G_cur[G_i])
+                            cur_click=np.sum(click_cur[G_cur[G_i]])/len(G_cur[G_i])
+                        group_prop[trial,iteration, G_i] = cur_propensity
+    #                     print(group_prop[trial,iteration, :])
+                        group_click[trial,iteration, G_i]=cur_click
+#                     true_group_rel[trial,iteration, :] = [np.sum(rele_gnd[G_cur[g]]) for g in range(len(G_trial))]  
+                    true_group_rel[trial,iteration, :] = [true_rele_aver[g] for g in range(len(G_trial))]
+    
+#                     group_prop[trial,iteration, :] = [np.sum(propensity_cur[G_cur[i]]) for i in range(len(G_trial))]
+#                     group_click[trial,iteration, :]=[np.sum(click_cur[G_cur[i]]) for i in range(len(G_trial))]
+# #                     true_group_rel[trial,iteration, :] = [np.sum(rele_gnd[G_cur[g]]) for g in range(len(G_trial))]  
+#                     true_group_rel[trial,iteration, :] = [true_rele_aver[g]*len(G_cur[g]) for g in range(len(G_trial))]
+#                     print(true_group_rel[trial,iteration, :])
+#             print(np.cumsum(group_prop,axis=1).shape,"*")
+            range_it=np.arange(1,iteration_num+1)[np.newaxis,:,np.newaxis]
+            data_meth_cur["prop"]=np.cumsum(group_prop,axis=1)/range_it     
+            data_meth_cur["true_rel"]=np.cumsum(true_group_rel ,axis=1)/range_it 
+            data_meth_cur["clicks"]=np.cumsum(group_click ,axis=1)
+            data_all_meth.append(data_meth_cur)    
+#             return data_all_meth
+        run_data=data_all_meth
+        overall_fairness = np.zeros((len(click_models) * method_num, trial_num, iteration_num, 4))
+        pair_group_combinations = [(a, b) for a in range(group_num) for b in range(a + 1, group_num)]
+        for i, data_cur in enumerate(run_data):
+
+            for a, b in pair_group_combinations:
+                overall_fairness[i, :, :, 0] += np.abs(
+                    data_cur["prop"][:, :, a] / data_cur["true_rel"][:, :, a] - data_cur["prop"][:, :, b] / data_cur["true_rel"][:, :, b])
+                overall_fairness[i, :, :, 1] += np.abs(
+                    data_cur["prop"][:, :, a] / data_cur["true_rel"][:, :, a] - data_cur["prop"][:, :, b] / data_cur["true_rel"][:, :, b])
+                overall_fairness[i, :, :, 2] += np.abs(
+                    data_cur["clicks"][:, :, a] / data_cur["true_rel"][:, :, a] - data_cur["clicks"][:, :, b] / data_cur["true_rel"][:, :, b])
+                overall_fairness[i, :, :, 3] += np.abs(
+                    data_cur["clicks"][:, :, a] / data_cur["true_rel"][:, :, a] - data_cur["clicks"][:, :, b] / data_cur["true_rel"][:, :,                                                                                            b])
+
+        overall_fairness /= len(pair_group_combinations)
+        PLOT_PREFIX_cur=PLOT_PREFIX+"unfairness_top"+str(top_k)+"/"
+        if not os.path.exists(PLOT_PREFIX_cur):
+            os.makedirs(PLOT_PREFIX_cur)
+        plot_unfairness_over_time(overall_fairness, click_models, methods, \
+                                  True,PLOT_PREFIX=PLOT_PREFIX_cur)
 
 
+def plot_topk(top_k_list=[3,5,10,20,30],file="plots/EXP1_topk/Fairness_Data.npy",\
+              labels=["1","2","3"],methods=["1","2","3"],PLOT_PREFIX="trial/",click_models=["pbm"]):
+    data = np.load(file, allow_pickle=True)
+    method_num=len(data)
+    trial_num,iteration_num=data[0]["rank_hist"].shape[:2]
+    G=data[0]['G']
+    group_num=len(G[0])
+    run_data=[]
+    data_top_k={}
+    
+    for top_k in top_k_list:
+        data_all_meth=[]
+        for meth in range(method_num):
+            data_meth_cur={}
+            group_prop=np.zeros((trial_num,iteration_num,group_num))
+            group_click=np.zeros((trial_num,iteration_num,group_num))
+            true_group_rel=np.zeros((trial_num,iteration_num,group_num))
+            pophist=data[meth]["pophist"]
+            clicks=np.zeros_like(pophist)
+            clicks[:,0,:]=pophist[:,0,:]
+            clicks[:,1:,:]=pophist[:,1:,:]-pophist[:,:-1,:]
+            
+            for trial in range(trial_num):
+                G_trial=data[meth]['G'][trial]
+                rank_hist=data[meth]['rank_hist'][trial,:,:top_k]
+                propensity=data[meth]['propensity_history'][trial,:,:]
+                rele_gnd=data[meth]["numerical_relevance"][trial,:]
+                clicks_trial=clicks[trial,:,:]
+                group_num_each=np.array([len(i)for i in data[meth]['G'][trial]])
+                true_rele_aver=data[meth]["true_rel"][trial,0]/group_num_each
+                
+#                 print(true_rele_aver,"true_rele_aver")
+                for iteration in range(iteration_num):
+                    propensity_cur=propensity[iteration,:]
+                    G_cur=[]
+                    top_k_ind=rank_hist[iteration,:]
+                    click_cur=clicks_trial[iteration,:]
+                    for j in G[trial]:
+                        G_cur.append(np.intersect1d(j,top_k_ind).astype(int))
+#                     print(G_cur)
+                    for G_i in range(len(G_trial)):
+                        cur_propensity=0
+                        cur_click=0
+                        if len(G_cur[G_i])==0:
+#                             print(G_cur[G_i])
+                            cur_propensity=0
+                            cur_click=0
+                        else:
+                            cur_propensity=np.sum(propensity_cur[G_cur[G_i]])/len(G_trial[G_i])
+                            cur_click=np.sum(click_cur[G_cur[G_i]])/len(G_trial[G_i])
+                        group_prop[trial,iteration, G_i] = cur_propensity
+    #                     print(group_prop[trial,iteration, :])
+                        group_click[trial,iteration, G_i]=cur_click
+#                     true_group_rel[trial,iteration, :] = [np.sum(rele_gnd[G_cur[g]]) for g in range(len(G_trial))]  
+                    true_group_rel[trial,iteration, :] = [true_rele_aver[g] for g in range(len(G_trial))]
+            range_it=np.arange(1,iteration_num+1)[np.newaxis,:,np.newaxis]
+            data_meth_cur["prop"]=np.cumsum(group_prop,axis=1)/range_it     
+            data_meth_cur["true_rel"]=np.cumsum(true_group_rel ,axis=1)/range_it 
+            data_meth_cur["clicks"]=np.cumsum(group_click ,axis=1)
+            data_all_meth.append(data_meth_cur)    
+#             return data_all_meth
+        run_data=data_all_meth
+        overall_fairness = np.zeros((len(click_models) * method_num, trial_num, iteration_num, 4))
+        pair_group_combinations = [(a, b) for a in range(group_num) for b in range(a + 1, group_num)]
+        for i, data_cur in enumerate(run_data):
 
+            for a, b in pair_group_combinations:
+                overall_fairness[i, :, :, 0] += np.abs(
+                    data_cur["prop"][:, :, a] / data_cur["true_rel"][:, :, a] - data_cur["prop"][:, :, b] / data_cur["true_rel"][:, :, b])
+                overall_fairness[i, :, :, 1] += np.abs(
+                    data_cur["prop"][:, :, a] / data_cur["true_rel"][:, :, a] - data_cur["prop"][:, :, b] / data_cur["true_rel"][:, :, b])
+                overall_fairness[i, :, :, 2] += np.abs(
+                    data_cur["clicks"][:, :, a] / data_cur["true_rel"][:, :, a] - data_cur["clicks"][:, :, b] / data_cur["true_rel"][:, :, b])
+                overall_fairness[i, :, :, 3] += np.abs(
+                    data_cur["clicks"][:, :, a] / data_cur["true_rel"][:, :, a] - data_cur["clicks"][:, :, b] / data_cur["true_rel"][:, :,                                                                                            b])
 
+        overall_fairness /= len(pair_group_combinations)
+        PLOT_PREFIX_cur=PLOT_PREFIX+"unfairness_top"+str(top_k)+"/"
+        if not os.path.exists(PLOT_PREFIX_cur):
+            os.makedirs(PLOT_PREFIX_cur)
+        plot_unfairness_over_time(overall_fairness, click_models, methods, \
+                                  True,PLOT_PREFIX=PLOT_PREFIX_cur)
 # Function that simulates and monitor the convergence to the relevance + the developement of cummulative fairness
 @ex.capture
 def collect_relevance_convergence(items, start_popularity, trials=10, methods=["Naive", "IPS"],
                                   click_models=["PBM_log"], iterations=2000, plot_individual_fairness=True,
-                                  multiple_items=None, PLOT_PREFIX="", MOVIE_RATING_FILE=""):
+                                  multiple_items=None, PLOT_PREFIX="", MOVIE_RATING_FILE="",top_k_list=[3,5,10,20,30],add_args=None):
 
     global get_numerical_relevances
-
+    add_args=copy.deepcopy(add_args)
     rel_diff = []
     if multiple_items is None:
         G = assign_groups(items)
@@ -582,33 +1179,59 @@ def collect_relevance_convergence(items, start_popularity, trials=10, methods=["
         else:
             assert (len(multiple_items) == trials)
             G = assign_groups(multiple_items[0])
+    print(type(click_models),type(methods),type(trials),type(iterations))
     overall_fairness = np.zeros((len(click_models) * len(methods), trials, iterations, 4))
     pair_group_combinations = [(a, b) for a in range(len(G)) for b in range(a + 1, len(G))]
     count = 0
     run_data = []
     frac_c = [[] for i in range(len(G))]
+    if len(items)>30:
+        top_k_list=top_k_list+[50,100]
+    print(top_k_list,"top_k_list")
+    add_args["top_k_list"]=top_k_list
     nn_errors = []
-    method_dict = {"Naive": "Naive", "IPS": r'$\hat{R}^{IPS}(d)$', "Pers": "D-ULTR", "Skyline-Pers": "Skyline",
+    item_length=len(items)
+    method_dict = {"Naive": "Naive", \
+#                    "IPS": r'$\hat{R}^{IPS}(d)$', \
+                    "IPS": "D_ULTR(Glob)",\
+                   "Pers": "D-ULTR", "Skyline-Pers": "Skyline",
                    "Fair-I-IPS": "FairCo(Imp)", "Fair-E-IPS": "FairCo(Exp)", "Fair-I-Pers": "FairCo(Imp)",
-                   "Fair-E-Pers": "FairCo(Exp)", "Fair-I-IPS-LP": "LinProg(Imp)", "Fair-E-IPS-LP": "LinProg(Exp)"}
+                   "Fair-E-Pers": "FairCo(Exp)", "Fair-I-IPS-LP": "LinProg(Imp)", "Fair-E-IPS-LP": "LinProg","IPS_I_top_down":"IPS_I_top_down","IPS_E_top_down":"IPS_E_top_down","Fair-I_top_down-Pers":"Fair-I_top_down-Pers","Fair-E_top_down-Pers":"Fair-E_top_down-Pers","IPS_E_greedy":"Fair_MMR","Fair-E_greedy-Pers":"Fair-E_greedy-Pers","Fair-E-IPS_pers-LP":"Fair-E-IPS_pers-LP"}
     user_generator = None
     for click_model in click_models:
 
-        if "lambda" in click_model: #For vcomparing different Lambdas,
+        if "lambda" in click_model and "lambda_cutoff" not in click_model: #For vcomparing different Lambdas,
             lam = float(click_model.replace("lambda", ""))
             ex.add_config({
                 'KP': lam,
                 'W_FAIR': lam
             })
             click_model = "PBM_log"
+        elif "lambda_cutoff" in click_model: #For vcomparing different Lambdas,
+            lam = float(click_model.replace("lambda_cutoff", ""))
+            ex.add_config({
+                'KP': lam,
+                'W_FAIR': lam
+            })
+            click_model = "PBM_cutoff"
         for method in methods:
             start_time = time.time()
             rel_diff_trial = []
             fairness = {"prop": np.zeros((trials, iterations, len(G))),
                         "clicks": np.zeros((trials, iterations, len(G))), "rel": np.zeros((trials, iterations, len(G))),
-                        "true_rel": np.zeros((trials, iterations, len(G))), "NDCG": np.zeros((trials, iterations))}
+                        "true_rel": np.zeros((trials, iterations, len(G))), "NDCG": np.zeros((trials, iterations)),\
+            "aff_scores": np.zeros((trials, iterations,item_length)),\
+                        "pophist":np.zeros((trials, iterations,item_length)),"hist":np.zeros((trials, iterations,item_length)),"w_pophist":np.zeros((trials, iterations,item_length)),\
+                        "propensity_history":np.zeros((trials, iterations,item_length)),"G":[None]*trials,"rank_hist":np.zeros((trials, iterations,item_length)),\
+                        "numerical_relevance":np.zeros((trials, item_length)),\
+                        "rank_group_id_sorted":np.zeros((trials, iterations,item_length)),\
+                       "rank_group_split":np.zeros((trials, len(G),item_length)),
+                       "rank_group_split_click":np.zeros((trials, len(G),item_length))}
+            for i in top_k_list:
+                fairness["NDCG_"+str(i)]=np.zeros((trials, iterations))
             nn_error_trial = []
             for i in range(trials):
+                print("trails",i,"method",method)
                 if multiple_items is not None:
                     if multiple_items == -1:  # Load a new bernully relevance table
                         MOVIE_RATING_FILE = MOVIE_RATING_FILE.replace("trial{}.npy".format(i-1),"trial{}.npy".format(i))
@@ -623,7 +1246,7 @@ def collect_relevance_convergence(items, start_popularity, trials=10, methods=["
                 popularity = np.copy(start_popularity)
                 # Run Simulation
                 iterations, ranking_hist, popularity_hist, final_ranking, users, ideal, mean_relevances, w_pophist, errors, mean_exposure, fairness_hist, p_pophist = \
-                    simulate(popularity, items, ranking_method=method, click_model=click_model, iterations=iterations, user_generator=user_generator)
+                    simulate(popularity, items, ranking_method=method, click_model=click_model, iterations=iterations, user_generator=user_generator,add_args=add_args)
                 ranking_hist = ranking_hist.astype(int)
                 if "Pers" in method:
                     nn_error_trial.append(errors)
@@ -642,6 +1265,7 @@ def collect_relevance_convergence(items, start_popularity, trials=10, methods=["
                 rel_diff_trial.append(np.mean(np.abs(rel_estimate - (mean_relevances)[np.newaxis, :]), axis=1))
 
                 # Cummulative Fairness per Iteration summed over trials
+                print(fairness_hist.keys(),"vfairness_hist.keys()")
                 for key, value in fairness_hist.items():
                     fairness[key][i] = value
                 if (trials <= 1):
@@ -695,6 +1319,7 @@ def collect_relevance_convergence(items, start_popularity, trials=10, methods=["
             rel_diff.append([rel_tmp, method_dict[method], rel_std])
 
     np.save(PLOT_PREFIX + "Fairness_Data.npy", run_data)
+
     # Plot NDCG
     plt.figure("NDCG")
     # plt.title("Average NDCG")
@@ -747,7 +1372,9 @@ def collect_relevance_convergence(items, start_popularity, trials=10, methods=["
 
     overall_fairness /= len(pair_group_combinations)
     plot_unfairness_over_time(overall_fairness, click_models, methods, True)
-
+#     print(labels,methods,click_models,"")
+    plot_topk(top_k_list=top_k_list,file=PLOT_PREFIX + "Fairness_Data.npy",\
+              labels=labels,methods=methods,PLOT_PREFIX=PLOT_PREFIX,click_models=click_models)
     ndcg_full = []
     for data in run_data:
         ndcg_full.append(data["NDCG"])

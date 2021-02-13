@@ -14,7 +14,7 @@ def my_config():
     U_ALPHA = 0.5
     U_BETA = 0.5
     U_STD = 0.3
-    w_fair = 10
+    w_fair = 0.1
     BI_LEFT = 0.5
     alpha = U_ALPHA
     beta = U_BETA
@@ -35,9 +35,9 @@ def my_config():
     #n_companies = 5
     n_company = 5
     movie_features = "factorization"
-
+#     add_args={}
     distribution = "bimodal" #User Distribution (bimodal, beta, discrete)
-    if int(EXPERIMENT) < 7:
+    if int(EXPERIMENT)%10 < 7:
         DATA_SET = 0  #NewsData
     else:
         DATA_SET = 1  #Movie Data
